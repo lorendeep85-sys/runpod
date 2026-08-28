@@ -20,6 +20,9 @@ CONNS = os.environ.get("USENET_CONN", "50")
 # medium, bukan slow: slow hanya memangkas ~5-8% ukuran tapi menambah hampir dua kali
 # waktu encode. Bisa digeser lewat env tanpa build ulang.
 X264_PRESET = os.environ.get("X264_PRESET", "medium")
+# "cpu" = NVDEC decode + x264 encode (lebih kecil, ~5-7 mnt).
+# "gpu" = seluruh jalur di GPU: NVDEC + scale_cuda + NVENC (~1-2 mnt, berkas ~2x lebih besar).
+PIPELINE = os.environ.get("PIPELINE", "cpu").lower()
 TARGET_LANGS = ["id", "ar", "es", "pt", "fr", "de"]
 TEXT_SUB = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
 # H.264 8-bit High — universal Android compat (bukan HEVC 10-bit yg banyak HP tak bisa).
@@ -104,6 +107,36 @@ def resolve(anilist_id, ep):
         batch.sort(key=lambda x: (x[1][1] - x[1][0])); t, rng = batch[0]; return t, rng, "batch"
     return None, None, "no release (episode/batch)"
 
+def encode_ladder_gpu(src, rungs, seconds=0):
+    """Seluruh jalur di GPU: NVDEC -> scale_cuda -> NVENC, frame tak pernah turun ke RAM.
+
+    Tercepat yang mungkin, tapi NVENC selalu lebih boros daripada x264 pada mutu setara --
+    itu batas perangkat kerasnya. Dipakai hanya bila env PIPELINE=gpu.
+    """
+    b = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
+         "-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+    if seconds: b += ["-t", str(seconds)]
+    b += ["-i", src]
+    labels = [f"v{i}" for i in range(len(rungs))]
+    fc = "[0:v]split=%d%s;" % (len(rungs), "".join(f"[s{i}]" for i in range(len(rungs))))
+    fc += ";".join(f"[s{i}]scale_cuda={w}:-2[{labels[i]}]" for i, (_, w, _, _) in enumerate(rungs))
+    cmd = b + ["-filter_complex", fc]
+    for i, (_, _, crf, dest) in enumerate(rungs):
+        cmd += ["-map", f"[{labels[i]}]", "-map", "0:a:0?",
+                "-c:v", "h264_nvenc", "-preset", "p6", "-profile:v", "high", "-level", "4.0",
+                "-rc", "vbr", "-cq", str(crf + 7), "-b:v", "0", "-bf", "3", "-b_ref_mode", "middle",
+                "-rc-lookahead", "32", "-multipass", "fullres",
+                "-spatial-aq", "1", "-temporal-aq", "1", "-aq-strength", "5",
+                "-c:a", "aac", "-ac", "2", "-b:a", "96k", "-af", "aresample=async=1000",
+                "-dn", "-movflags", "+faststart", "-y", dest]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
+    ok = r.returncode == 0 and all(os.path.exists(d) and os.path.getsize(d) > 200_000
+                                  for _, _, _, d in rungs)
+    if not ok:
+        raise RuntimeError(f"ladder gpu gagal: {(r.stderr or '')[-500:]}")
+    return "nvenc+nvdec"
+
+
 def encode_ladder(src, rungs, seconds=0):
     """Encode seluruh ladder dalam SATU perintah ffmpeg.
 
@@ -114,6 +147,9 @@ def encode_ladder(src, rungs, seconds=0):
 
     rungs = [(name, width, crf, dest), ...]. Mengembalikan "x264+nvdec" atau "x264".
     """
+    if PIPELINE == "gpu":
+        return encode_ladder_gpu(src, rungs, seconds)
+
     def build(hw):
         b = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
         # NVDEC adalah unit terpisah dari NVENC: decode berpindah ke GPU sementara x264
