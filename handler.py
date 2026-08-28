@@ -143,10 +143,23 @@ def process_job(job, s3, bucket, smoke=0):
         cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "nzb_fetch.py"), nzb, DL, "--conn", CONNS]
         if mode == "batch" and rng:
             a, b = rng; cmd += ["--skip-eps", ",".join(str(x) for x in range(a, b + 1) if x != ep)]
-        subprocess.run(cmd, timeout=10800)
+        # nzb_fetch membaca NNTP_*, sementara endpoint diisi USENET_* agar seragam dengan
+        # runner lain. Tanpa jembatan ini subprocess mati seketika karena KeyError dan
+        # kegagalannya menyamar jadi "episode tak ada di batch".
+        senv = dict(os.environ)
+        for src_k, dst_k in (("USENET_HOST", "NNTP_HOST"), ("USENET_PORT", "NNTP_PORT"),
+                             ("USENET_USER", "NNTP_USER"), ("USENET_PASS", "NNTP_PASS")):
+            if os.environ.get(src_k) and not senv.get(dst_k):
+                senv[dst_k] = os.environ[src_k]
+        miss = [k for k in ("NNTP_HOST", "NNTP_USER", "NNTP_PASS") if not senv.get(k)]
+        if miss:
+            r = "env usenet belum diset: " + ",".join(miss)
+            api_post("/tsuki/fail", {"job_id": jid, "reason": r}); return {"fail": r}
+        rc = subprocess.run(cmd, timeout=10800, env=senv).returncode
         vids = [f for f in os.listdir(DL) if f.lower().endswith((".mkv", ".mp4")) and not f.startswith("e")]
         if not vids:
-            api_post("/tsuki/fail", {"job_id": jid, "reason": "download gagal / episode tak ada di batch"}); return {"fail": "download"}
+            r = f"download gagal (nzb_fetch rc={rc}) / episode tak ada di batch"
+            api_post("/tsuki/fail", {"job_id": jid, "reason": r}); return {"fail": r}
         if mode == "batch" and len(vids) > 1:
             import importlib; nf = importlib.import_module("nzb_fetch")
             match = [f for f in vids if nf.guess_episode(f) == ep]; vids = match or vids
