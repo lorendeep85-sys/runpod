@@ -35,7 +35,11 @@ TEXT_SUB = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
 #
 # Sempat dinaikkan ke 26 atas dugaan mereka membidik 750-950 kb/s; dugaan itu keliru,
 # ditarik dari tiga sampel yang kebetulan semuanya episode berkonten ringan.
-LADDER = [("1080p", 1920, 22), ("720p", 1280, 23), ("480p", 854, 24)]
+# (nama, lebar, crf, maxrate kb/s). Maxrate adalah rem: CRF murni tak punya batas atas,
+# dan sumber HEVC 10-bit yang padat membuatnya meledak -- Ghost in the Shell e8 keluar
+# 746MB dari sumber 1014MB (4340 kb/s), lebih boros dari judul terberat AnimePahe.
+# Dengan plafon ini konten ringan tetap turun jauh di bawahnya, yang berat mentok di plafon.
+LADDER = [("1080p", 1920, 22, 2000), ("720p", 1280, 23, 1000), ("480p", 854, 24, 500)]
 DL = "/tmp/dl"
 
 
@@ -123,19 +127,20 @@ def encode_ladder_gpu(src, rungs, seconds=0):
     # NVENC H.264 hanya menerima 8-bit. Tanpa konversi ini ffmpeg menolak dengan
     # "Invalid argument" -- dan penyebabnya tak terbaca dari pesan itu.
     fc += ";".join(f"[s{i}]scale_cuda={w}:-2:format=nv12[{labels[i]}]"
-                   for i, (_, w, _, _) in enumerate(rungs))
+                   for i, (_, w, _, _, _) in enumerate(rungs))
     cmd = b + ["-filter_complex", fc]
-    for i, (_, _, crf, dest) in enumerate(rungs):
+    for i, (_, _, crf, mx, dest) in enumerate(rungs):
         cmd += ["-map", f"[{labels[i]}]", "-map", "0:a:0?",
                 "-c:v", "h264_nvenc", "-preset", "p6", "-profile:v", "high", "-level", "4.0",
-                "-rc", "vbr", "-cq", str(crf + 7), "-b:v", "0", "-bf", "3", "-b_ref_mode", "middle",
+                "-rc", "vbr", "-cq", str(crf + 7), "-b:v", "0",
+                "-maxrate", f"{mx}k", "-bufsize", f"{mx*2}k", "-bf", "3", "-b_ref_mode", "middle",
                 "-rc-lookahead", "32", "-multipass", "fullres",
                 "-spatial-aq", "1", "-temporal-aq", "1", "-aq-strength", "5",
                 "-c:a", "aac", "-ac", "2", "-b:a", "96k", "-af", "aresample=async=1000",
                 "-dn", "-movflags", "+faststart", "-y", dest]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
     ok = r.returncode == 0 and all(os.path.exists(d) and os.path.getsize(d) > 200_000
-                                  for _, _, _, d in rungs)
+                                  for _, _, _, _, d in rungs)
     if not ok:
         raise RuntimeError(f"ladder gpu gagal: {(r.stderr or '')[-500:]}")
     return "nvenc+nvdec"
@@ -167,18 +172,19 @@ def encode_ladder(src, rungs, seconds=0):
     labels = [f"v{i}" for i in range(len(rungs))]
     fc = "[0:v]split=%d%s;" % (len(rungs), "".join(f"[s{i}]" for i in range(len(rungs))))
     fc += ";".join(f"[s{i}]scale={w}:-2[{labels[i]}]"
-                   for i, (_, w, _, _) in enumerate(rungs))
+                   for i, (_, w, _, _, _) in enumerate(rungs))
     tail = ["-filter_complex", fc]
-    for i, (_, _, crf, dest) in enumerate(rungs):
+    for i, (_, _, crf, mx, dest) in enumerate(rungs):
         tail += ["-map", f"[{labels[i]}]", "-map", "0:a:0?",
                 "-c:v", "libx264", "-preset", X264_PRESET, "-tune", "animation",
                 "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p", "-crf", str(crf),
+                "-maxrate", f"{mx}k", "-bufsize", f"{mx*2}k",
                 "-c:a", "aac", "-ac", "2", "-b:a", "96k", "-af", "aresample=async=1000",
                 "-dn", "-movflags", "+faststart", "-y", dest]
     def run(hw):
         r = subprocess.run(build(hw) + tail, capture_output=True, text=True, timeout=14400)
         ok = r.returncode == 0 and all(os.path.exists(d) and os.path.getsize(d) > 200_000
-                                       for _, _, _, d in rungs)
+                                       for _, _, _, _, d in rungs)
         return ok, (r.stderr or "")[-500:]
 
     ok, err = run(True)
@@ -190,7 +196,7 @@ def encode_ladder(src, rungs, seconds=0):
     if ok: return "x264"
     raise RuntimeError(f"ladder gagal: {err2}")
 
-def encode_one(src, dest, w, crf, seconds=0):
+def encode_one(src, dest, w, crf, mx=0, seconds=0):
     """H.264 8-bit High. x264 CPU sebagai encoder utama, NVENC hanya cadangan.
 
     x264 dengan `-tune animation` jauh lebih padat daripada NVENC pada mutu setara:
@@ -210,7 +216,7 @@ def encode_one(src, dest, w, crf, seconds=0):
 
     x = base + ["-c:v", "libx264", "-preset", X264_PRESET, "-tune", "animation",
                 "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
-                "-crf", str(crf)] + aud
+                "-crf", str(crf)] + (["-maxrate", f"{mx}k", "-bufsize", f"{mx*2}k"] if mx else []) + aud
     r = subprocess.run(x, capture_output=True, text=True, timeout=14400)
     if r.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 200_000:
         return "x264"
@@ -219,7 +225,8 @@ def encode_one(src, dest, w, crf, seconds=0):
     nv = base + ["-c:v", "h264_nvenc", "-preset", "p6", "-profile:v", "high", "-pix_fmt", "yuv420p",
                  "-rc", "vbr", "-cq", str(crf + 7), "-b:v", "0", "-bf", "3", "-b_ref_mode", "middle",
                  "-rc-lookahead", "32", "-multipass", "fullres",
-                 "-spatial-aq", "1", "-temporal-aq", "1", "-aq-strength", "5"] + aud
+                 "-spatial-aq", "1", "-temporal-aq", "1", "-aq-strength", "5"] \
+                 + (["-maxrate", f"{mx}k", "-bufsize", f"{mx*2}k"] if mx else []) + aud
     r2 = subprocess.run(nv, capture_output=True, text=True, timeout=14400)
     if r2.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 200_000:
         return "nvenc"
@@ -300,7 +307,7 @@ def process_job(job, s3, bucket, smoke=0):
         prog(f"src {os.path.getsize(src)/1e9:.2f}GB, sisa disk {st.f_bavail*st.f_frsize/1e9:.1f}GB")
         videos = []
         lad = ladder_for(src_width(src))
-        rungs = [(name, w, cq, os.path.join(DL, f"e{ep}.{name}.mp4")) for name, w, cq in lad]
+        rungs = [(name, w, cq, mx, os.path.join(DL, f"e{ep}.{name}.mp4")) for name, w, cq, mx in lad]
         prog(f"encode ladder {len(rungs)} rung (decode sekali)")
         try:
             enc = encode_ladder(src, rungs, smoke)
@@ -308,10 +315,10 @@ def process_job(job, s3, bucket, smoke=0):
             # Jatuh ke jalur per-rung bila filter_complex ditolak sumber tertentu.
             log(f"  ladder gabungan gagal ({str(e)[:120]}), jatuh ke per-rung")
             enc = None
-        for name, w, cq, out in rungs:
+        for name, w, cq, mx, out in rungs:
             if enc is None:
                 prog(f"encode {name} ({w}p)")
-                m = encode_one(src, out, w, cq, smoke)
+                m = encode_one(src, out, w, cq, mx, smoke)
             else:
                 m = enc
             prog(f"upload {name}")
