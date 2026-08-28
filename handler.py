@@ -27,6 +27,29 @@ X264_PRESET = os.environ.get("X264_PRESET", "medium")
 # ukurannya sebagian berasal dari sasaran mutu yang berbeda, bukan efisiensi semata.
 # "cpu" = NVDEC decode + x264 encode, untuk bila mutu perlu dinaikkan lagi.
 PIPELINE = os.environ.get("PIPELINE", "gpu").lower()
+
+
+def cpu_quota():
+    """Jatah CPU yang benar-benar berlaku, bukan jumlah inti host.
+
+    Di dalam container os.cpu_count() melaporkan CPU host (48 di mesin ini) padahal
+    cgroup bisa membatasi jauh lebih kecil -- jebakan yang sama seperti /proc/meminfo.
+    Menyetel thread x264 dari angka host akan membuat proses saling berebut inti.
+    """
+    try:
+        v = open("/sys/fs/cgroup/cpu.max").read().split()          # cgroup v2
+        if v[0] != "max":
+            return max(1, round(int(v[0]) / int(v[1])))
+    except Exception:
+        pass
+    try:                                                            # cgroup v1
+        q = int(open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read())
+        pr = int(open("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read())
+        if q > 0:
+            return max(1, q // pr)
+    except Exception:
+        pass
+    return os.cpu_count() or 4
 TARGET_LANGS = ["id", "ar", "es", "pt", "fr", "de"]
 TEXT_SUB = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
 # H.264 8-bit High — universal Android compat (bukan HEVC 10-bit yg banyak HP tak bisa).
@@ -150,6 +173,63 @@ def encode_ladder_gpu(src, rungs, seconds=0):
     return "nvenc+nvdec"
 
 
+def encode_ladder_cpu_par(src, rungs, seconds=0):
+    """Tiap rung sebagai proses ffmpeg tersendiri, berjalan serentak.
+
+    Decode sudah ditangani NVDEC di GPU, jadi mendecode tiga kali nyaris tak berbiaya --
+    dan itu membebaskan tiap rung memakai kumpulan thread x264 sendiri. Lebih cepat
+    daripada satu proses berisi tiga encoder yang berebut thread, karena x264 menskala
+    makin buruk di atas belasan thread: tiga proses berthread sedang mengalahkan satu
+    proses berthread besar.
+    """
+    total = cpu_quota()
+    per = max(2, min(16, total // max(1, len(rungs))))
+    log(f"  cpu quota {total}, {len(rungs)} rung x {per} thread")
+
+    def cmd_for(name, w, crf, mx, dest, hw):
+        b = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
+        if hw: b += ["-hwaccel", "cuda"]
+        if seconds: b += ["-t", str(seconds)]
+        return b + ["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-vf", f"scale={w}:-2",
+                    "-c:v", "libx264", "-preset", X264_PRESET, "-tune", "animation",
+                    "-threads", str(per), "-profile:v", "high", "-level", "4.0",
+                    "-pix_fmt", "yuv420p", "-crf", str(crf),
+                    "-maxrate", f"{mx}k", "-bufsize", f"{mx*2}k",
+                    "-c:a", "aac", "-ac", "2", "-b:a", "96k", "-af", "aresample=async=1000",
+                    "-dn", "-movflags", "+faststart", "-y", dest]
+
+    def launch(hw, subset):
+        # stderr diarahkan ke berkas, bukan PIPE: tiga proses berjalan serentak sementara
+        # kita menunggunya berurutan, dan pipa yang penuh akan membekukan proses yang
+        # belum sempat dibaca.
+        procs = []
+        for r in subset:
+            ef = open(os.path.join(DL, f".err-{r[0]}"), "w+b")
+            procs.append((r, subprocess.Popen(cmd_for(*r, hw), stderr=ef), ef))
+        bad = []
+        for r, pr, ef in procs:
+            try:
+                pr.wait(timeout=14400)
+            except subprocess.TimeoutExpired:
+                pr.kill()
+            ef.seek(0); err = ef.read().decode(errors="replace")[-300:]; ef.close()
+            try: os.remove(ef.name)
+            except OSError: pass
+            if pr.returncode != 0 or not os.path.exists(r[4]) or os.path.getsize(r[4]) <= 200_000:
+                bad.append((r, err))
+        return bad
+
+    bad = launch(True, rungs)
+    if bad:
+        # NVDEC menolak sebagian sumber (mis. H.264 10-bit). Ulangi hanya rung yang gagal.
+        log(f"  {len(bad)} rung gagal dgn nvdec, ulang dengan decode CPU")
+        bad2 = launch(False, [r for r, _ in bad])
+        if bad2:
+            raise RuntimeError(f"ladder cpu gagal: {bad2[0][1]}")
+        return "x264" if len(bad) == len(rungs) else "x264+nvdec"
+    return "x264+nvdec"
+
+
 def encode_ladder(src, rungs, seconds=0):
     """Encode seluruh ladder dalam SATU perintah ffmpeg.
 
@@ -162,6 +242,8 @@ def encode_ladder(src, rungs, seconds=0):
     """
     if PIPELINE == "gpu":
         return encode_ladder_gpu(src, rungs, seconds)
+    if PIPELINE == "cpu":
+        return encode_ladder_cpu_par(src, rungs, seconds)
 
     def build(hw):
         b = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
@@ -378,7 +460,7 @@ def handler(event):
             except Exception as e:
                 d[name] = str(e)
         try:
-            d["cpu"] = os.cpu_count()
+            d["cpu"] = f"host {os.cpu_count()}, kuota cgroup {cpu_quota()}"
             d["df"] = subprocess.run(["df", "-h"], capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
         except Exception as e:
             d["df"] = str(e)
