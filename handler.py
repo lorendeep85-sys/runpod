@@ -17,7 +17,9 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64) Chrome/120"
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg"); FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 API = os.environ["API"]; TOKEN = os.environ["TOKEN"]
 CONNS = os.environ.get("USENET_CONN", "50")
-X264_PRESET = os.environ.get("X264_PRESET", "slow")
+# medium, bukan slow: slow hanya memangkas ~5-8% ukuran tapi menambah hampir dua kali
+# waktu encode. Bisa digeser lewat env tanpa build ulang.
+X264_PRESET = os.environ.get("X264_PRESET", "medium")
 TARGET_LANGS = ["id", "ar", "es", "pt", "fr", "de"]
 TEXT_SUB = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
 # H.264 8-bit High — universal Android compat (bukan HEVC 10-bit yg banyak HP tak bisa).
@@ -101,6 +103,38 @@ def resolve(anilist_id, ep):
     if batch:
         batch.sort(key=lambda x: (x[1][1] - x[1][0])); t, rng = batch[0]; return t, rng, "batch"
     return None, None, "no release (episode/batch)"
+
+def encode_ladder(src, rungs, seconds=0):
+    """Encode seluruh ladder dalam SATU perintah ffmpeg.
+
+    Versi sebelumnya memanggil ffmpeg sekali per rung, sehingga sumber 1,4 GB dibongkar
+    tiga kali -- dan decode justru bagian terberat bagi CPU, bukan encode. Dengan filter
+    `split` sumber didecode sekali lalu dialirkan ke tiga encoder sekaligus, yang juga
+    membuat ketiganya berjalan paralel dan mengisi vCPU jauh lebih rapat.
+
+    rungs = [(name, width, crf, dest), ...]. Mengembalikan "x264".
+    """
+    base = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
+    if seconds: base += ["-t", str(seconds)]
+    base += ["-i", src]
+
+    labels = [f"v{i}" for i in range(len(rungs))]
+    fc = "[0:v]split=%d%s;" % (len(rungs), "".join(f"[s{i}]" for i in range(len(rungs))))
+    fc += ";".join(f"[s{i}]scale={w}:-2[{labels[i]}]"
+                   for i, (_, w, _, _) in enumerate(rungs))
+    cmd = base + ["-filter_complex", fc]
+    for i, (_, _, crf, dest) in enumerate(rungs):
+        cmd += ["-map", f"[{labels[i]}]", "-map", "0:a:0?",
+                "-c:v", "libx264", "-preset", X264_PRESET, "-tune", "animation",
+                "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p", "-crf", str(crf),
+                "-c:a", "aac", "-ac", "2", "-b:a", "96k", "-af", "aresample=async=1000",
+                "-dn", "-movflags", "+faststart", "-y", dest]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
+    ok = r.returncode == 0 and all(os.path.exists(d) and os.path.getsize(d) > 200_000
+                                  for _, _, _, d in rungs)
+    if not ok:
+        raise RuntimeError(f"ladder gagal: {(r.stderr or '')[-500:]}")
+    return "x264"
 
 def encode_one(src, dest, w, crf, seconds=0):
     """H.264 8-bit High. x264 CPU sebagai encoder utama, NVENC hanya cadangan.
@@ -211,19 +245,27 @@ def process_job(job, s3, bucket, smoke=0):
         st = os.statvfs(DL)
         prog(f"src {os.path.getsize(src)/1e9:.2f}GB, sisa disk {st.f_bavail*st.f_frsize/1e9:.1f}GB")
         videos = []
-        for name, w, cq in ladder_for(src_width(src)):
-            out = os.path.join(DL, f"e{ep}.{name}.mp4")
-            prog(f"encode {name} ({w}p)")
-            m = encode_one(src, out, w, cq, smoke)
+        lad = ladder_for(src_width(src))
+        rungs = [(name, w, cq, os.path.join(DL, f"e{ep}.{name}.mp4")) for name, w, cq in lad]
+        prog(f"encode ladder {len(rungs)} rung (decode sekali)")
+        try:
+            enc = encode_ladder(src, rungs, smoke)
+        except Exception as e:
+            # Jatuh ke jalur per-rung bila filter_complex ditolak sumber tertentu.
+            log(f"  ladder gabungan gagal ({str(e)[:120]}), jatuh ke per-rung")
+            enc = None
+        for name, w, cq, out in rungs:
+            if enc is None:
+                prog(f"encode {name} ({w}p)")
+                m = encode_one(src, out, w, cq, smoke)
+            else:
+                m = enc
             prog(f"upload {name}")
             key = f"tsuki/{sid}/e{ep}.{name}.mp4"
             sz = os.path.getsize(out)
             s3.upload_file(out, bucket, key, ExtraArgs={"ContentType": "video/mp4"})
             videos.append({"quality": name, "r2_key": key, "size": sz, "enc": m})
             log(f"    {name}: {m} -> {key} ({sz/1e6:.0f}MB)")
-            # Disk container serverless sempit. Tanpa penghapusan ini ketiga rung menumpuk
-            # bersama sumber 1,4 GB sampai container dibunuh kehabisan ruang -- kegagalannya
-            # muncul sebagai "job timed out", bukan sebagai error yang bisa ditangkap Python.
             try: os.remove(out)
             except OSError: pass
         prog("ekstrak subtitle"); subs = extract_subs(src, DL); subout = []
@@ -271,6 +313,7 @@ def handler(event):
             except Exception as e:
                 d[name] = str(e)
         try:
+            d["cpu"] = os.cpu_count()
             d["df"] = subprocess.run(["df", "-h"], capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
         except Exception as e:
             d["df"] = str(e)
