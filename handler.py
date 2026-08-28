@@ -211,7 +211,7 @@ def process_job(job, s3, bucket, smoke=0):
             key = f"tsuki/{sid}/e{ep}.{name}.mp4"
             sz = os.path.getsize(out)
             s3.upload_file(out, bucket, key, ExtraArgs={"ContentType": "video/mp4"})
-            videos.append({"quality": name, "r2_key": key, "size": sz})
+            videos.append({"quality": name, "r2_key": key, "size": sz, "enc": m})
             log(f"    {name}: {m} -> {key} ({sz/1e6:.0f}MB)")
             # Disk container serverless sempit. Tanpa penghapusan ini ketiga rung menumpuk
             # bersama sumber 1,4 GB sampai container dibunuh kehabisan ruang -- kegagalannya
@@ -225,7 +225,12 @@ def process_job(job, s3, bucket, smoke=0):
             subout.append({"lang": lang if len(lang) == 2 else "en", "r2_key": key})
         api_post("/tsuki/done", {"job_id": jid, "series_id": sid, "episode_number": ep, "videos": videos, "subs": subout})
         log(f"  DONE ep{ep}: {len(videos)} rung, {len(subout)} sub")
-        return {"done": {"series_id": sid, "ep": ep, "rungs": len(videos), "subs": len(subout)}}
+        # Ukuran dan encoder ikut dikembalikan: tanpa ini satu-satunya cara memeriksa hasil
+        # encode adalah membuka log worker di dashboard, yang tak bisa diambil lewat API.
+        return {"done": {"series_id": sid, "ep": ep, "subs": len(subout),
+                         "src_mb": round(os.path.getsize(src) / 1e6),
+                         "rungs": [{"q": v["quality"], "mb": round(v["size"] / 1e6), "enc": v["enc"]}
+                                   for v in videos]}}
     except Exception as e:
         api_post("/tsuki/fail", {"job_id": jid, "reason": str(e)[:250]}); return {"fail": str(e)[:200]}
 
