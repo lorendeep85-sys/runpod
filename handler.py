@@ -126,6 +126,18 @@ def s3_client():
         aws_access_key_id=c["access_key_id"], aws_secret_access_key=c["secret_access_key"], region_name="auto")
     return s3, c["bucket"]
 
+_EV = {"e": None}
+
+def prog(msg):
+    """Tandai tahap berjalan. Kalau worker dibunuh, tahap terakhir tetap terbaca di /status,
+    sehingga titik gagal tidak perlu ditebak dari log yang tak bisa diambil lewat API."""
+    log(msg)
+    try:
+        if _EV["e"] is not None:
+            runpod.serverless.progress_update(_EV["e"], msg)
+    except Exception:
+        pass
+
 def process_job(job, s3, bucket, smoke=0):
     sid = job["series_id"]; ep = int(job["episode_number"]); jid = job["id"]
     log(f"job {jid}: {job.get('title')} ep{ep} (series {sid})")
@@ -155,7 +167,9 @@ def process_job(job, s3, bucket, smoke=0):
         if miss:
             r = "env usenet belum diset: " + ",".join(miss)
             api_post("/tsuki/fail", {"job_id": jid, "reason": r}); return {"fail": r}
+        prog(f"unduh mulai [{mode}]")
         rc = subprocess.run(cmd, timeout=10800, env=senv).returncode
+        prog(f"unduh selesai rc={rc}")
         vids = [f for f in os.listdir(DL) if f.lower().endswith((".mkv", ".mp4")) and not f.startswith("e")]
         if not vids:
             r = f"download gagal (nzb_fetch rc={rc}) / episode tak ada di batch"
@@ -165,11 +179,13 @@ def process_job(job, s3, bucket, smoke=0):
             match = [f for f in vids if nf.guess_episode(f) == ep]; vids = match or vids
         src = os.path.join(DL, sorted(vids, key=lambda f: -os.path.getsize(os.path.join(DL, f)))[0])
         st = os.statvfs(DL)
-        log(f"  src {os.path.getsize(src)/1e9:.2f}GB, sisa disk {st.f_bavail*st.f_frsize/1e9:.1f}GB")
+        prog(f"src {os.path.getsize(src)/1e9:.2f}GB, sisa disk {st.f_bavail*st.f_frsize/1e9:.1f}GB")
         videos = []
         for name, w, cq in ladder_for(src_width(src)):
             out = os.path.join(DL, f"e{ep}.{name}.mp4")
+            prog(f"encode {name} ({w}p)")
             m = encode_one(src, out, w, cq, smoke)
+            prog(f"upload {name}")
             key = f"tsuki/{sid}/e{ep}.{name}.mp4"
             sz = os.path.getsize(out)
             s3.upload_file(out, bucket, key, ExtraArgs={"ContentType": "video/mp4"})
@@ -180,7 +196,7 @@ def process_job(job, s3, bucket, smoke=0):
             # muncul sebagai "job timed out", bukan sebagai error yang bisa ditangkap Python.
             try: os.remove(out)
             except OSError: pass
-        subs = extract_subs(src, DL); subout = []
+        prog("ekstrak subtitle"); subs = extract_subs(src, DL); subout = []
         for lang, path in subs.items():
             key = f"tsuki/{sid}/e{ep}.{lang}.vtt"
             s3.upload_file(path, bucket, key, ExtraArgs={"ContentType": "text/vtt"})
@@ -228,6 +244,7 @@ def handler(event):
                      "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")}
         return {"status": "diag", **d}
 
+    _EV["e"] = event
     s3, bucket = s3_client()
     r = api_post("/tsuki/claim", {"worker_id": worker}); job = r.get("job")
     if not job: return {"status": "empty"}
