@@ -20,13 +20,17 @@ CONNS = os.environ.get("USENET_CONN", "50")
 # medium, bukan slow: slow hanya memangkas ~5-8% ukuran tapi menambah hampir dua kali
 # waktu encode. Bisa digeser lewat env tanpa build ulang.
 X264_PRESET = os.environ.get("X264_PRESET", "medium")
-# "gpu" (bawaan) = seluruh jalur di GPU: NVDEC + scale_cuda + NVENC. Pada uji berdampingan
+# "cpu" (bawaan) = NVDEC decode di GPU + x264 paralel di CPU. Dipilih karena waktu encode
+# dibayar sekali sedangkan ukuran berkas dibayar tiap kali ditonton: pada sumber setara
+# x264 menghasilkan 205MB vs 371MB lewat NVENC, dan selisih 45% itu berlaku selamanya
+# di penyimpanan maupun bandwidth R2.
+# "gpu" = seluruh jalur di GPU: NVDEC + scale_cuda + NVENC. Pada uji berdampingan
 # dengan sumber setara (1449MB vs 1410MB) jalur ini menghasilkan 282MB dalam 6,8 menit,
 # dibanding 374MB dalam 18,8 menit lewat x264 -- lebih kecil sekaligus jauh lebih cepat.
 # Catatan: keduanya tidak membidik kualitas yang sama (CQ 29 vs CRF 22), jadi selisih
 # ukurannya sebagian berasal dari sasaran mutu yang berbeda, bukan efisiensi semata.
 # "cpu" = NVDEC decode + x264 encode, untuk bila mutu perlu dinaikkan lagi.
-PIPELINE = os.environ.get("PIPELINE", "gpu").lower()
+PIPELINE = os.environ.get("PIPELINE", "cpu").lower()
 
 
 def cpu_quota():
