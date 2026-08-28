@@ -17,10 +17,12 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64) Chrome/120"
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg"); FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 API = os.environ["API"]; TOKEN = os.environ["TOKEN"]
 CONNS = os.environ.get("USENET_CONN", "50")
+X264_PRESET = os.environ.get("X264_PRESET", "slow")
 TARGET_LANGS = ["id", "ar", "es", "pt", "fr", "de"]
 TEXT_SUB = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
 # H.264 8-bit High — universal Android compat (bukan HEVC 10-bit yg banyak HP tak bisa).
-LADDER = [("1080p", 1920, 23), ("720p", 1280, 24), ("480p", 854, 25)]
+# Angka ketiga = CRF x264 (bukan CQ NVENC; skalanya tidak setara).
+LADDER = [("1080p", 1920, 22), ("720p", 1280, 23), ("480p", 854, 24)]
 DL = "/tmp/dl"
 
 
@@ -92,20 +94,40 @@ def resolve(anilist_id, ep):
         batch.sort(key=lambda x: (x[1][1] - x[1][0])); t, rng = batch[0]; return t, rng, "batch"
     return None, None, "no release (episode/batch)"
 
-def encode_one(src, dest, w, cq, seconds=0):
-    """H.264 8-bit High NVENC; fallback libx264 CPU. seconds>0 = potong utk test."""
+def encode_one(src, dest, w, crf, seconds=0):
+    """H.264 8-bit High. x264 CPU sebagai encoder utama, NVENC hanya cadangan.
+
+    x264 dengan `-tune animation` jauh lebih padat daripada NVENC pada mutu setara:
+    tune itu melonggarkan deblocking dan menurunkan psy-rd agar cocok dengan konten
+    bergaris tegas dan berbidang warna rata. NVENC tidak punya padanannya dan selalu
+    boros -- ladder CQ 23 sempat menghasilkan 1120 MB dari sumber 1447 MB, nyaris tanpa
+    pemampatan. NVENC tetap dipertahankan sebagai jaring pengaman bila x264 gagal.
+
+    Tetap 8-bit High, bukan High 10: profil 10-bit bermasalah di decoder Android persis
+    seperti HEVC Main10 yang sudah ditinggalkan project ini.
+    """
     base = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
     if seconds: base += ["-t", str(seconds)]
     base += ["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-vf", f"scale={w}:-2"]
-    aud = ["-c:a", "aac", "-ac", "2", "-b:a", "128k", "-af", "aresample=async=1000", "-dn", "-movflags", "+faststart", "-y", dest]
-    nv = base + ["-c:v", "h264_nvenc", "-preset", "p5", "-profile:v", "high", "-pix_fmt", "yuv420p",
-                 "-rc", "vbr", "-cq", str(cq), "-b:v", "0", "-spatial-aq", "1", "-temporal-aq", "1", "-aq-strength", "8"] + aud
-    r = subprocess.run(nv, capture_output=True, text=True, timeout=14400)
-    if r.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 200_000: return "nvenc"
-    x = base + ["-c:v", "libx264", "-preset", "medium", "-profile:v", "high", "-pix_fmt", "yuv420p", "-crf", str(cq)] + aud
-    r2 = subprocess.run(x, capture_output=True, text=True, timeout=14400)
-    if r2.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 200_000: return "x264"
-    raise RuntimeError(f"encode gagal: nvenc={(r.stderr or '')[-400:]} | x264={(r2.stderr or '')[-200:]}")
+    aud = ["-c:a", "aac", "-ac", "2", "-b:a", "128k", "-af", "aresample=async=1000",
+           "-dn", "-movflags", "+faststart", "-y", dest]
+
+    x = base + ["-c:v", "libx264", "-preset", X264_PRESET, "-tune", "animation",
+                "-profile:v", "high", "-level", "4.1", "-pix_fmt", "yuv420p",
+                "-crf", str(crf)] + aud
+    r = subprocess.run(x, capture_output=True, text=True, timeout=14400)
+    if r.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 200_000:
+        return "x264"
+
+    # NVENC memakai skala kualitas sendiri; +7 mendekatkan ukurannya ke CRF x264 di atas.
+    nv = base + ["-c:v", "h264_nvenc", "-preset", "p6", "-profile:v", "high", "-pix_fmt", "yuv420p",
+                 "-rc", "vbr", "-cq", str(crf + 7), "-b:v", "0", "-bf", "3", "-b_ref_mode", "middle",
+                 "-rc-lookahead", "32", "-multipass", "fullres",
+                 "-spatial-aq", "1", "-temporal-aq", "1", "-aq-strength", "5"] + aud
+    r2 = subprocess.run(nv, capture_output=True, text=True, timeout=14400)
+    if r2.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 200_000:
+        return "nvenc"
+    raise RuntimeError(f"encode gagal: x264={(r.stderr or '')[-400:]} | nvenc={(r2.stderr or '')[-200:]}")
 
 def extract_subs(src, outdir):
     o = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "s", "-show_entries", "stream=index,codec_name:stream_tags=language", "-of", "json", src], capture_output=True, text=True, timeout=60)
