@@ -366,7 +366,15 @@ def process_job(job, s3, bucket, smoke=0):
     sid = job["series_id"]; ep = int(job["episode_number"]); jid = job["id"]
     _JOB["id"] = jid
     log(f"job {jid}: {job.get('title')} ep{ep} (series {sid})")
-    rel, rng, mode = resolve(job.get("anilist_id"), ep)
+    # Rilis yang dipilih operator lewat panel dipakai apa adanya; pemilihan otomatis
+    # hanya berjalan bila job tidak membawa torrent tertentu.
+    if job.get("torrent_id"):
+        rel = {"id": job["torrent_id"], "name": job.get("torrent_name") or ""}
+        rng = _range_covers(rel["name"], ep)
+        mode = "batch" if rng else "episode"
+        log(f"  rilis pilihan operator: {rel['name'][:66]}")
+    else:
+        rel, rng, mode = resolve(job.get("anilist_id"), ep)
     if not rel:
         api_post("/tsuki/fail", {"job_id": jid, "reason": mode}); return {"skip": mode}
     t = rel["torrent"] if isinstance(rel, dict) and "torrent" in rel else rel
