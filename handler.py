@@ -119,7 +119,11 @@ def encode_ladder_gpu(src, rungs, seconds=0):
     b += ["-i", src]
     labels = [f"v{i}" for i in range(len(rungs))]
     fc = "[0:v]split=%d%s;" % (len(rungs), "".join(f"[s{i}]" for i in range(len(rungs))))
-    fc += ";".join(f"[s{i}]scale_cuda={w}:-2[{labels[i]}]" for i, (_, w, _, _) in enumerate(rungs))
+    # format=nv12 wajib: sumber HEVC 10-bit didecode jadi p010 di memori GPU, sementara
+    # NVENC H.264 hanya menerima 8-bit. Tanpa konversi ini ffmpeg menolak dengan
+    # "Invalid argument" -- dan penyebabnya tak terbaca dari pesan itu.
+    fc += ";".join(f"[s{i}]scale_cuda={w}:-2:format=nv12[{labels[i]}]"
+                   for i, (_, w, _, _) in enumerate(rungs))
     cmd = b + ["-filter_complex", fc]
     for i, (_, _, crf, dest) in enumerate(rungs):
         cmd += ["-map", f"[{labels[i]}]", "-map", "0:a:0?",
