@@ -219,6 +219,10 @@ def handler(event):
                 d[name] = [l.strip() for l in o.splitlines() if "nvenc" in l] if name == "nvenc" else o.strip()
             except Exception as e:
                 d[name] = str(e)
+        try:
+            d["df"] = subprocess.run(["df", "-h"], capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
+        except Exception as e:
+            d["df"] = str(e)
         d["env"] = {k: bool(os.environ.get(k)) for k in
                     ("API", "TOKEN", "USENET_HOST", "USENET_USER", "USENET_PASS",
                      "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")}
