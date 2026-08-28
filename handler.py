@@ -112,29 +112,43 @@ def encode_ladder(src, rungs, seconds=0):
     `split` sumber didecode sekali lalu dialirkan ke tiga encoder sekaligus, yang juga
     membuat ketiganya berjalan paralel dan mengisi vCPU jauh lebih rapat.
 
-    rungs = [(name, width, crf, dest), ...]. Mengembalikan "x264".
+    rungs = [(name, width, crf, dest), ...]. Mengembalikan "x264+nvdec" atau "x264".
     """
-    base = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
-    if seconds: base += ["-t", str(seconds)]
-    base += ["-i", src]
+    def build(hw):
+        b = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
+        # NVDEC adalah unit terpisah dari NVENC: decode berpindah ke GPU sementara x264
+        # tetap mengencode di CPU. Tanpa -hwaccel_output_format frame disalin balik ke RAM,
+        # yang memang dibutuhkan x264. Decode adalah rem utama pipeline ini, jadi
+        # memindahkannya membebaskan CPU sepenuhnya untuk encode.
+        if hw: b += ["-hwaccel", "cuda"]
+        if seconds: b += ["-t", str(seconds)]
+        return b + ["-i", src]
 
     labels = [f"v{i}" for i in range(len(rungs))]
     fc = "[0:v]split=%d%s;" % (len(rungs), "".join(f"[s{i}]" for i in range(len(rungs))))
     fc += ";".join(f"[s{i}]scale={w}:-2[{labels[i]}]"
                    for i, (_, w, _, _) in enumerate(rungs))
-    cmd = base + ["-filter_complex", fc]
+    tail = ["-filter_complex", fc]
     for i, (_, _, crf, dest) in enumerate(rungs):
-        cmd += ["-map", f"[{labels[i]}]", "-map", "0:a:0?",
+        tail += ["-map", f"[{labels[i]}]", "-map", "0:a:0?",
                 "-c:v", "libx264", "-preset", X264_PRESET, "-tune", "animation",
                 "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p", "-crf", str(crf),
                 "-c:a", "aac", "-ac", "2", "-b:a", "96k", "-af", "aresample=async=1000",
                 "-dn", "-movflags", "+faststart", "-y", dest]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=14400)
-    ok = r.returncode == 0 and all(os.path.exists(d) and os.path.getsize(d) > 200_000
-                                  for _, _, _, d in rungs)
-    if not ok:
-        raise RuntimeError(f"ladder gagal: {(r.stderr or '')[-500:]}")
-    return "x264"
+    def run(hw):
+        r = subprocess.run(build(hw) + tail, capture_output=True, text=True, timeout=14400)
+        ok = r.returncode == 0 and all(os.path.exists(d) and os.path.getsize(d) > 200_000
+                                       for _, _, _, d in rungs)
+        return ok, (r.stderr or "")[-500:]
+
+    ok, err = run(True)
+    if ok: return "x264+nvdec"
+    # NVDEC menolak sebagian sumber (mis. H.264 10-bit yang tak didukungnya). Ulangi
+    # dengan decode CPU sebelum menyerah, supaya episode tidak gagal hanya karena itu.
+    log(f"  nvdec gagal ({err[:120]}), ulang dengan decode CPU")
+    ok, err2 = run(False)
+    if ok: return "x264"
+    raise RuntimeError(f"ladder gagal: {err2}")
 
 def encode_one(src, dest, w, crf, seconds=0):
     """H.264 8-bit High. x264 CPU sebagai encoder utama, NVENC hanya cadangan.
