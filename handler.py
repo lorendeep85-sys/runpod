@@ -342,6 +342,7 @@ def s3_client():
     return s3, c["bucket"]
 
 _EV = {"e": None}
+_JOB = {"id": None}
 
 def prog(msg):
     """Tandai tahap berjalan. Kalau worker dibunuh, tahap terakhir tetap terbaca di /status,
@@ -352,9 +353,18 @@ def prog(msg):
             runpod.serverless.progress_update(_EV["e"], msg)
     except Exception:
         pass
+    # Diteruskan ke backend agar terbaca di dashboard. Status job saja tidak cukup:
+    # tanpa ini panel hanya tahu "dikerjakan" tanpa tahu sedang mengunduh segmen ke berapa
+    # atau mengencode rung yang mana.
+    try:
+        if _JOB["id"]:
+            api_post("/tsuki/progress", {"job_id": _JOB["id"], "msg": msg})
+    except Exception:
+        pass
 
 def process_job(job, s3, bucket, smoke=0):
     sid = job["series_id"]; ep = int(job["episode_number"]); jid = job["id"]
+    _JOB["id"] = jid
     log(f"job {jid}: {job.get('title')} ep{ep} (series {sid})")
     rel, rng, mode = resolve(job.get("anilist_id"), ep)
     if not rel:
@@ -383,7 +393,24 @@ def process_job(job, s3, bucket, smoke=0):
             r = "env usenet belum diset: " + ",".join(miss)
             api_post("/tsuki/fail", {"job_id": jid, "reason": r}); return {"fail": r}
         prog(f"unduh mulai [{mode}]")
-        rc = subprocess.run(cmd, timeout=10800, env=senv).returncode
+        # Keluaran nzb_fetch dibaca baris demi baris supaya kemajuan segmen bisa diteruskan
+        # ke dashboard saat berlangsung. Dengan subprocess.run biasa, unduhan 1,4 GB tampak
+        # sebagai jeda hening berpuluh detik tanpa keterangan apa pun.
+        dl = subprocess.Popen(cmd, env=senv, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True, bufsize=1)
+        t_last = 0.0
+        for line in dl.stdout:
+            line = line.rstrip()
+            if line:
+                log(line)
+            if "segmen" in line and time.time() - t_last > 5:
+                t_last = time.time()
+                prog("unduh " + line.strip())
+        try:
+            dl.wait(timeout=10800)
+        except subprocess.TimeoutExpired:
+            dl.kill()
+        rc = dl.returncode
         prog(f"unduh selesai rc={rc}")
         vids = [f for f in os.listdir(DL) if f.lower().endswith((".mkv", ".mp4")) and not f.startswith("e")]
         if not vids:
