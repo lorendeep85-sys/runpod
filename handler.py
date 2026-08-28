@@ -164,14 +164,22 @@ def process_job(job, s3, bucket, smoke=0):
             import importlib; nf = importlib.import_module("nzb_fetch")
             match = [f for f in vids if nf.guess_episode(f) == ep]; vids = match or vids
         src = os.path.join(DL, sorted(vids, key=lambda f: -os.path.getsize(os.path.join(DL, f)))[0])
+        st = os.statvfs(DL)
+        log(f"  src {os.path.getsize(src)/1e9:.2f}GB, sisa disk {st.f_bavail*st.f_frsize/1e9:.1f}GB")
         videos = []
         for name, w, cq in ladder_for(src_width(src)):
             out = os.path.join(DL, f"e{ep}.{name}.mp4")
             m = encode_one(src, out, w, cq, smoke)
             key = f"tsuki/{sid}/e{ep}.{name}.mp4"
+            sz = os.path.getsize(out)
             s3.upload_file(out, bucket, key, ExtraArgs={"ContentType": "video/mp4"})
-            videos.append({"quality": name, "r2_key": key, "size": os.path.getsize(out)})
-            log(f"    {name}: {m} -> {key} ({os.path.getsize(out)/1e6:.0f}MB)")
+            videos.append({"quality": name, "r2_key": key, "size": sz})
+            log(f"    {name}: {m} -> {key} ({sz/1e6:.0f}MB)")
+            # Disk container serverless sempit. Tanpa penghapusan ini ketiga rung menumpuk
+            # bersama sumber 1,4 GB sampai container dibunuh kehabisan ruang -- kegagalannya
+            # muncul sebagai "job timed out", bukan sebagai error yang bisa ditangkap Python.
+            try: os.remove(out)
+            except OSError: pass
         subs = extract_subs(src, DL); subout = []
         for lang, path in subs.items():
             key = f"tsuki/{sid}/e{ep}.{lang}.vtt"
