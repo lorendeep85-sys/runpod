@@ -372,6 +372,11 @@ def handler(event):
                      "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")}
         return {"status": "diag", **d}
 
+    # PIPELINE bisa ditimpa per-job supaya dua mode bisa dibandingkan berdampingan
+    # tanpa mengubah env endpoint dan menunggu worker berganti.
+    if inp.get("pipeline"):
+        globals()["PIPELINE"] = str(inp["pipeline"]).lower()
+
     _EV["e"] = event
     s3, bucket = s3_client()
     r = api_post("/tsuki/claim", {"worker_id": worker}); job = r.get("job")
