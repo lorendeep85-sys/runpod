@@ -22,10 +22,15 @@ TARGET_LANGS = ["id", "ar", "es", "pt", "fr", "de"]
 TEXT_SUB = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
 # H.264 8-bit High — universal Android compat (bukan HEVC 10-bit yg banyak HP tak bisa).
 # Angka ketiga = CRF x264 (bukan CQ NVENC; skalanya tidak setara).
-# CRF disetel meniru AnimePahe: berkas mereka terbukti libx264 High 8-bit level 4.0
-# pada ~750-950 kb/s (140-175 MB per episode 24 menit). Bitrate yang berbeda-beda antar
-# judul menandakan mereka memakai CRF, bukan bitrate tetap.
-LADDER = [("1080p", 1920, 26), ("720p", 1280, 26), ("480p", 854, 27)]
+# CRF meniru kepadatan AnimePahe (sama-sama sumber SubsPlease, sama-sama libx264 High
+# 8-bit level 4.0). Nilai CRF persisnya tak bisa dipulihkan dari berkas mereka karena
+# string opsi x264-nya terhapus saat di-mux ulang ffmpeg, jadi dicocokkan lewat kepadatan:
+# CRF 22 di sini menghasilkan ~2180 kb/s, sementara AnimePahe pada judul menuntut
+# (Tsuihou Juukishi 09) memakai 2713 kb/s -- jadi CRF 22 sudah sedikit lebih padat.
+#
+# Sempat dinaikkan ke 26 atas dugaan mereka membidik 750-950 kb/s; dugaan itu keliru,
+# ditarik dari tiga sampel yang kebetulan semuanya episode berkonten ringan.
+LADDER = [("1080p", 1920, 22), ("720p", 1280, 23), ("480p", 854, 24)]
 DL = "/tmp/dl"
 
 
