@@ -197,6 +197,33 @@ def handler(event):
     inp = (event or {}).get("input", {}) or {}
     smoke = int(inp.get("smoke", 0))
     worker = inp.get("worker_id", os.environ.get("RUNPOD_POD_ID", "rp"))
+
+    # Mode diagnostik: memotret kondisi container tanpa mengklaim job, supaya menyelidiki
+    # worker yang dibunuh tidak perlu mengorbankan episode dari antrean.
+    if inp.get("diag"):
+        d = {}
+        for path in ("/", DL if os.path.isdir(DL) else "/tmp"):
+            try:
+                st = os.statvfs(path)
+                d[f"disk {path}"] = f"{st.f_bavail*st.f_frsize/1e9:.1f}GB bebas / {st.f_blocks*st.f_frsize/1e9:.1f}GB total"
+            except OSError as e:
+                d[f"disk {path}"] = str(e)
+        try:
+            mi = dict(l.split(":", 1) for l in open("/proc/meminfo").read().splitlines() if ":" in l)
+            d["mem"] = f"total {mi['MemTotal'].strip()}, avail {mi['MemAvailable'].strip()}"
+        except Exception as e:
+            d["mem"] = str(e)
+        for name, cmd in (("nvenc", f"{FFMPEG} -hide_banner -encoders"), ("gpu", "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader")):
+            try:
+                o = subprocess.run(cmd.split(), capture_output=True, text=True, timeout=60).stdout
+                d[name] = [l.strip() for l in o.splitlines() if "nvenc" in l] if name == "nvenc" else o.strip()
+            except Exception as e:
+                d[name] = str(e)
+        d["env"] = {k: bool(os.environ.get(k)) for k in
+                    ("API", "TOKEN", "USENET_HOST", "USENET_USER", "USENET_PASS",
+                     "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")}
+        return {"status": "diag", **d}
+
     s3, bucket = s3_client()
     r = api_post("/tsuki/claim", {"worker_id": worker}); job = r.get("job")
     if not job: return {"status": "empty"}
