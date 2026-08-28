@@ -20,9 +20,13 @@ CONNS = os.environ.get("USENET_CONN", "50")
 # medium, bukan slow: slow hanya memangkas ~5-8% ukuran tapi menambah hampir dua kali
 # waktu encode. Bisa digeser lewat env tanpa build ulang.
 X264_PRESET = os.environ.get("X264_PRESET", "medium")
-# "cpu" = NVDEC decode + x264 encode (lebih kecil, ~5-7 mnt).
-# "gpu" = seluruh jalur di GPU: NVDEC + scale_cuda + NVENC (~1-2 mnt, berkas ~2x lebih besar).
-PIPELINE = os.environ.get("PIPELINE", "cpu").lower()
+# "gpu" (bawaan) = seluruh jalur di GPU: NVDEC + scale_cuda + NVENC. Pada uji berdampingan
+# dengan sumber setara (1449MB vs 1410MB) jalur ini menghasilkan 282MB dalam 6,8 menit,
+# dibanding 374MB dalam 18,8 menit lewat x264 -- lebih kecil sekaligus jauh lebih cepat.
+# Catatan: keduanya tidak membidik kualitas yang sama (CQ 29 vs CRF 22), jadi selisih
+# ukurannya sebagian berasal dari sasaran mutu yang berbeda, bukan efisiensi semata.
+# "cpu" = NVDEC decode + x264 encode, untuk bila mutu perlu dinaikkan lagi.
+PIPELINE = os.environ.get("PIPELINE", "gpu").lower()
 TARGET_LANGS = ["id", "ar", "es", "pt", "fr", "de"]
 TEXT_SUB = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
 # H.264 8-bit High — universal Android compat (bukan HEVC 10-bit yg banyak HP tak bisa).
