@@ -22,7 +22,10 @@ TARGET_LANGS = ["id", "ar", "es", "pt", "fr", "de"]
 TEXT_SUB = {"subrip", "ass", "ssa", "webvtt", "mov_text"}
 # H.264 8-bit High — universal Android compat (bukan HEVC 10-bit yg banyak HP tak bisa).
 # Angka ketiga = CRF x264 (bukan CQ NVENC; skalanya tidak setara).
-LADDER = [("1080p", 1920, 22), ("720p", 1280, 23), ("480p", 854, 24)]
+# CRF disetel meniru AnimePahe: berkas mereka terbukti libx264 High 8-bit level 4.0
+# pada ~750-950 kb/s (140-175 MB per episode 24 menit). Bitrate yang berbeda-beda antar
+# judul menandakan mereka memakai CRF, bukan bitrate tetap.
+LADDER = [("1080p", 1920, 26), ("720p", 1280, 26), ("480p", 854, 27)]
 DL = "/tmp/dl"
 
 
@@ -109,11 +112,11 @@ def encode_one(src, dest, w, crf, seconds=0):
     base = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
     if seconds: base += ["-t", str(seconds)]
     base += ["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-vf", f"scale={w}:-2"]
-    aud = ["-c:a", "aac", "-ac", "2", "-b:a", "128k", "-af", "aresample=async=1000",
+    aud = ["-c:a", "aac", "-ac", "2", "-b:a", "96k", "-af", "aresample=async=1000",
            "-dn", "-movflags", "+faststart", "-y", dest]
 
     x = base + ["-c:v", "libx264", "-preset", X264_PRESET, "-tune", "animation",
-                "-profile:v", "high", "-level", "4.1", "-pix_fmt", "yuv420p",
+                "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
                 "-crf", str(crf)] + aud
     r = subprocess.run(x, capture_output=True, text=True, timeout=14400)
     if r.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 200_000:
