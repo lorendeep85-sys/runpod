@@ -73,7 +73,13 @@ def score(t, want_episodes=None, relax=False):
     if RE_10BIT.search(low):  s += 6
 
     # --- subtitle: sub 'id' resmi = hemat biaya translate AI ---
+    # Aturan operator: di antara rilis per-episode, pilih yang PALING BANYAK
+    # bahasa subtitle-nya. Tiap bahasa +4 (dibatasi 15 = +60), jadi rilis
+    # 15-bahasa unggul jelas atas rilis 1-bahasa tanpa menenggelamkan faktor
+    # lain. Bonus 'id' tetap di atasnya: sub Indonesia resmi menghapus seluruh
+    # biaya translate AI untuk episode itu.
     subs = set(x.lower() for x in (t.get("sublangs") or []))
+    s += min(len(subs), 15) * 4
     if "id" in subs: s += 40
     if "en" in subs: s += 12
     if not subs:
@@ -96,11 +102,28 @@ def score(t, want_episodes=None, relax=False):
         if   0.95 <= ratio <= 1.10: s += 35     # satu season utuh
         elif ratio > 1.10:          s += 10     # multi-season, boleh
         elif ratio >= 0.5:          s += 5
-    if RE_BATCH.search(low) and fc > 1: s += 10
+    # Deteksi batch dari STRUKTUR, bukan nama. Pola nama rapuh: rilis
+    # "... S02E01-E07" memakai en-dash, bukan hubung ASCII, sehingga RE_BATCH
+    # meleset dan batch justru berskor lebih tinggi dari rilis per-episode.
+    # Sinyal andal = tanpa episode_no tapi berisi banyak berkas (sama dengan
+    # yang dipakai handler.resolve).
+    is_batch = (t.get("episode_no") is None and fc > 1) or (RE_BATCH.search(low) and fc > 1)
+    if is_batch:
+        # Bonus HANYA saat memang mengambil satu season utuh (want_episodes
+        # diisi). Saat mengisi SATU episode, batch dihukum berat -- aturan
+        # operator: rilis per-episode selalu didahulukan, sebanyak apa pun
+        # subtitle yang dibawa batch.
+        s += 10 if want_episodes else -60
 
     # --- grup ---
     g = ((t.get("group") or {}).get("name") or "").lower()
-    if g in GOOD_GROUPS: s += 15
+    # PRIORITAS BERJENJANG, bukan bonus rata. Erai-raws didahulukan karena
+    # konsisten membawa subtitle Indonesia resmi (15 bahasa termasuk 'id');
+    # SubsPlease hanya 'en'. Ini preferensi, bukan penyaring -- grup lain tetap
+    # dipakai kalau memang cuma itu yang tersedia.
+    if   g == "erai-raws":  s += 40
+    elif g == "subsplease": s += 28
+    elif g in GOOD_GROUPS:  s += 15
 
     return s
 

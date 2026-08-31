@@ -92,7 +92,6 @@ def norm_lang(t):
     m = {"eng": "en", "spa": "es", "por": "pt", "fre": "fr", "fra": "fr", "ger": "de",
          "deu": "de", "ara": "ar", "ind": "id", "jpn": "ja", "und": ""}
     t = m.get(t, t); return t if len(t) == 2 else ""
-def is_subsplease(t): return "subsplease" in (((t.get("group") or {}).get("name", "") + " " + (t.get("name") or "")).lower())
 def nzb_url(tid, name): return f"{STORAGE}/{'tosho/nzbs' if tid >= 1_000_000 else 'nzbs'}/{tid}/{urllib.parse.quote(name)}.nzb.gz"
 def fetch_nzb(url, dest):
     raw = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "aniplay-mirror/1.0"}), timeout=120).read()
@@ -130,8 +129,11 @@ def resolve(anilist_id, ep):
         if len(res) < 100: break
     cands = [t for t in tor if t.get("episode_no") == ep and t.get("has_nzb")]
     if cands:
-        sp = [t for t in cands if is_subsplease(t)]
-        p = release_picker.pick(sp or cands, top=1, allow_relax=False)
+        # JANGAN pra-saring per grup di sini. Baris ini dulu memaksa
+        # SubsPlease-saja, sehingga prioritas berjenjang di release_picker
+        # (erai-raws > subsplease > lainnya) TIDAK PERNAH terpakai. Serahkan
+        # seluruh kandidat ke penskor.
+        p = release_picker.pick(cands, top=1, allow_relax=False)
         if p: return p[0], None, "episode"
     batch = []
     for t in tor:
