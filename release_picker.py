@@ -146,6 +146,17 @@ def pick(torrents, want_episodes=None, top=1, allow_relax=True):
                 "route": "usenet" if t.get("has_nzb") else "torrent",
             })
         if out:
-            out.sort(key=lambda x: -x["score"])
-            return out[:top]
+            # 1080p adalah SYARAT, bukan sekadar nilai tambah. Ladder kita punya
+            # tiga rung (1080/720/480) dan handler.rungs() memangkasnya ke lebar
+            # sumber -- sumber 720p hanya menghasilkan dua rung, selamanya.
+            #
+            # Sebagai nilai, +30 vs +18 terlalu tipis: selisih 12 itu kalah oleh
+            # subtitle (sampai +60) dan tingkat grup (+40), sehingga rilis 720p
+            # bersubtitle banyak rutin menang. Jadi kalau ADA kandidat 1080p,
+            # pilihan dibatasi ke situ dulu; 720p hanya dipakai bila memang tidak
+            # ada 1080p sama sekali -- lebih baik dua rung daripada nihil.
+            hd = [x for x in out if RE_1080.search(x["torrent"].get("name", "").lower())]
+            pool = hd or out
+            pool.sort(key=lambda x: -x["score"])
+            return pool[:top]
     return []

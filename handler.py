@@ -117,6 +117,35 @@ def _range_covers(name, ep):
             if best is None or (b - a) < (best[1] - best[0]): best = (a, b)
     return best
 
+# Nomor episode dari NAMA rilis, untuk berkas yang episode_no-nya kosong.
+# TsukiHime tidak selalu menandai nomor episode: "[Erai-raws] Mahoutsukai no Yome
+# - 16 [1080p].mkv" datang dengan episode_no=None dan filecount=1, sehingga luput
+# dari jalur per-episode (yang mengandalkan episode_no) MAUPUN jalur batch (yang
+# menuntut filecount>1). Rilisnya ada, tapi tak terlihat oleh keduanya.
+#
+# Sengaja ketat. Angka lain di nama rilis berlimpah -- 1080p, x264, 10bit, AAC
+# 2.0, tahun, hash -- jadi tiap pola dikunci ke bentuk yang khas nomor episode,
+# dan rentang seperti "01 ~ 24" ditolak lebih dulu karena itu batch.
+_EP_POLA = [
+    re.compile(r'\bS\d{1,2}E(\d{1,4})\b', re.I),                      # S01E16
+    re.compile(r'\bEp(?:isode)?[ ._]*(\d{1,4})\b', re.I),             # Episode 16 / Ep.16
+    re.compile(r'[-–] (\d{1,4})(?:v\d)?(?= *[\[(]| *$|\.mkv|\.mp4)', re.I),  # " - 16 [" / " - 16v2.mkv"
+]
+_EP_RENTANG = re.compile(r'\b\d{1,4} *[~–] *\d{1,4}\b|\bS\d{1,2}E\d{1,4} *- *E?\d{1,4}\b', re.I)
+
+
+def _ep_dari_nama(nama, ep):
+    """True bila nama rilis menunjuk TEPAT episode ini, bukan rentang."""
+    n = str(nama or "")
+    if _EP_RENTANG.search(n):
+        return False
+    for pola in _EP_POLA:
+        m = pola.search(n)
+        if m and int(m.group(1)) == int(ep):
+            return True
+    return False
+
+
 def resolve(anilist_id, ep):
     if not anilist_id: return None, None, "no anilist_id"
     try: a = hj(f"{TSUKI}/animes/anilist/{anilist_id}")
@@ -135,6 +164,16 @@ def resolve(anilist_id, ep):
         # seluruh kandidat ke penskor.
         p = release_picker.pick(cands, top=1, allow_relax=False)
         if p: return p[0], None, "episode"
+    # Jalur kedua: rilis satu-episode yang nomornya hanya ada di NAMA.
+    if not cands:
+        byname = [t for t in tor
+                  if t.get("has_nzb") and t.get("episode_no") is None
+                  and (t.get("filecount") or 1) <= 1
+                  and _ep_dari_nama(t.get("name"), ep)]
+        if byname:
+            p = release_picker.pick(byname, top=1, allow_relax=False)
+            if p: return p[0], None, "episode"
+
     batch = []
     for t in tor:
         if t.get("has_nzb") and t.get("episode_no") is None and (t.get("filecount") or 0) > 1:
