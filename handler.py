@@ -7,7 +7,7 @@ upload R2 -> lapor /tsuki/done. Return status. RunPod autoscale = paralel.
 
 Env (di endpoint RunPod): API, TOKEN, USENET_USER, USENET_PASS, USENET_HOST, USENET_PORT, USENET_CONN.
 """
-import gzip, json, os, re, subprocess, sys, time, urllib.parse, urllib.request
+import gzip, json, os, re, subprocess, sys, time, urllib.parse, urllib.request, urllib.error
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import release_picker
 import runpod
@@ -539,6 +539,27 @@ def handler(event):
                 d[name] = [l.strip() for l in o.splitlines() if "nvenc" in l] if name == "nvenc" else o.strip()
             except Exception as e:
                 d[name] = str(e)
+            # Jangkauan jaringan keluar. AniList MEMBLOKIR Cloudflare Workers --
+            # diuji langsung dari dalam Worker: HTTP 403 dalam 3-16 ms dengan pesan
+            # "You have been manually blocked". Pod berjalan di luar Cloudflare,
+            # jadi pertanyaannya apakah ia bisa. Ini menjawabnya tanpa menebak.
+            for nama, url, body in (
+                ("anilist", "https://graphql.anilist.co",
+                 json.dumps({"query": "query{Media(id:194219,type:ANIME){id idMal}}"}).encode()),
+                ("tsukihime", f"{TSUKI}/torrents?limit=1", None),
+            ):
+                t0 = time.time()
+                try:
+                    req = urllib.request.Request(url, data=body, headers={
+                        "Content-Type": "application/json", "User-Agent": "aniplay-pod"})
+                    with urllib.request.urlopen(req, timeout=20) as r:
+                        isi = r.read(200).decode("utf-8", "replace")
+                    d[f"net {nama}"] = f"HTTP {r.status} ({(time.time()-t0)*1000:.0f}ms) {isi[:110]}"
+                except urllib.error.HTTPError as e:
+                    d[f"net {nama}"] = f"HTTP {e.code} ({(time.time()-t0)*1000:.0f}ms) {e.read(160).decode('utf-8','replace')}"
+                except Exception as e:
+                    d[f"net {nama}"] = f"GAGAL ({(time.time()-t0)*1000:.0f}ms) {type(e).__name__}: {str(e)[:90]}"
+
         try:
             d["cpu"] = f"host {os.cpu_count()}, kuota cgroup {cpu_quota()}"
             d["df"] = subprocess.run(["df", "-h"], capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
