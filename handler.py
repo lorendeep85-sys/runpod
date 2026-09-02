@@ -409,7 +409,15 @@ def process_job(job, s3, bucket, smoke=0):
     log(f"job {jid}: {job.get('title')} ep{ep} (series {sid})")
     # Rilis yang dipilih operator lewat panel dipakai apa adanya; pemilihan otomatis
     # hanya berjalan bila job tidak membawa torrent tertentu.
-    if job.get("torrent_id"):
+    # Job yang membawa nzb_url berasal dari sumber SELAIN TsukiHime (aninzb),
+    # yang memberi tautan NZB langsung alih-alih id yang bisa disusun jadi URL.
+    # Cabang ini harus di ATAS torrent_id: job aninzb tidak punya torrent_id, jadi
+    # tanpa ini ia jatuh ke pemilih otomatis dan tautannya diabaikan diam-diam.
+    if job.get("nzb_url"):
+        rel = {"id": 0, "name": job.get("torrent_name") or "", "nzb_url": job["nzb_url"]}
+        rng, mode = None, "episode"
+        log(f"  sumber {job.get('sumber') or 'luar'}: {rel['name'][:66]}")
+    elif job.get("torrent_id"):
         rel = {"id": job["torrent_id"], "name": job.get("torrent_name") or ""}
         rng = _range_covers(rel["name"], ep)
         mode = "batch" if rng else "episode"
@@ -425,7 +433,9 @@ def process_job(job, s3, bucket, smoke=0):
         try: os.remove(os.path.join(DL, f))
         except OSError: pass
     try:
-        nzb = fetch_nzb(nzb_url(t["id"], t["name"]), os.path.join(DL, "job.nzb"))
+        # nzb_url dipakai apa adanya bila ada; kalau tidak, disusun dari id
+        # TsukiHime seperti sebelumnya.
+        nzb = fetch_nzb(t.get("nzb_url") or nzb_url(t["id"], t["name"]), os.path.join(DL, "job.nzb"))
         cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "nzb_fetch.py"), nzb, DL, "--conn", CONNS]
         if mode == "batch" and rng:
             a, b = rng; cmd += ["--skip-eps", ",".join(str(x) for x in range(a, b + 1) if x != ep)]
