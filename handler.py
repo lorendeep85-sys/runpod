@@ -553,7 +553,7 @@ def process_job(job, s3, bucket, smoke=0):
         api_post("/tsuki/fail", {"job_id": jid, "reason": str(e)[:250]}); return {"fail": str(e)[:200]}
 
 
-REVISI = "2026-09-02 nzb+1080p+diag"
+REVISI = "2026-09-02 softsub-gate"
 
 
 def handler(event):
