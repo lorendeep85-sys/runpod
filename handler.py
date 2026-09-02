@@ -534,6 +534,9 @@ def process_job(job, s3, bucket, smoke=0):
         api_post("/tsuki/fail", {"job_id": jid, "reason": str(e)[:250]}); return {"fail": str(e)[:200]}
 
 
+REVISI = "2026-09-02 nzb+1080p+diag"
+
+
 def handler(event):
     """1 invocation = 1 episode. input opsional {smoke:90} utk test klip pendek."""
     inp = (event or {}).get("input", {}) or {}
@@ -561,26 +564,26 @@ def handler(event):
                 d[name] = [l.strip() for l in o.splitlines() if "nvenc" in l] if name == "nvenc" else o.strip()
             except Exception as e:
                 d[name] = str(e)
-            # Jangkauan jaringan keluar. AniList MEMBLOKIR Cloudflare Workers --
-            # diuji langsung dari dalam Worker: HTTP 403 dalam 3-16 ms dengan pesan
-            # "You have been manually blocked". Pod berjalan di luar Cloudflare,
-            # jadi pertanyaannya apakah ia bisa. Ini menjawabnya tanpa menebak.
-            for nama, url, body in (
-                ("anilist", "https://graphql.anilist.co",
-                 json.dumps({"query": "query{Media(id:194219,type:ANIME){id idMal}}"}).encode()),
-                ("tsukihime", f"{TSUKI}/torrents?limit=1", None),
-            ):
-                t0 = time.time()
-                try:
-                    req = urllib.request.Request(url, data=body, headers={
-                        "Content-Type": "application/json", "User-Agent": "aniplay-pod"})
-                    with urllib.request.urlopen(req, timeout=20) as r:
-                        isi = r.read(200).decode("utf-8", "replace")
-                    d[f"net {nama}"] = f"HTTP {r.status} ({(time.time()-t0)*1000:.0f}ms) {isi[:110]}"
-                except urllib.error.HTTPError as e:
-                    d[f"net {nama}"] = f"HTTP {e.code} ({(time.time()-t0)*1000:.0f}ms) {e.read(160).decode('utf-8','replace')}"
-                except Exception as e:
-                    d[f"net {nama}"] = f"GAGAL ({(time.time()-t0)*1000:.0f}ms) {type(e).__name__}: {str(e)[:90]}"
+        # Jangkauan jaringan keluar. AniList MEMBLOKIR Cloudflare Workers --
+        # diuji langsung dari dalam Worker: HTTP 403 dalam 3-16 ms dengan pesan
+        # "You have been manually blocked". Pod berjalan di luar Cloudflare,
+        # jadi pertanyaannya apakah ia bisa. Ini menjawabnya tanpa menebak.
+        for nama, url, body in (
+            ("anilist", "https://graphql.anilist.co",
+             json.dumps({"query": "query{Media(id:194219,type:ANIME){id idMal}}"}).encode()),
+            ("tsukihime", f"{TSUKI}/torrents?limit=1", None),
+        ):
+            t0 = time.time()
+            try:
+                req = urllib.request.Request(url, data=body, headers={
+                    "Content-Type": "application/json", "User-Agent": "aniplay-pod"})
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    isi = r.read(200).decode("utf-8", "replace")
+                d[f"net {nama}"] = f"HTTP {r.status} ({(time.time()-t0)*1000:.0f}ms) {isi[:110]}"
+            except urllib.error.HTTPError as e:
+                d[f"net {nama}"] = f"HTTP {e.code} ({(time.time()-t0)*1000:.0f}ms) {e.read(160).decode('utf-8','replace')}"
+            except Exception as e:
+                d[f"net {nama}"] = f"GAGAL ({(time.time()-t0)*1000:.0f}ms) {type(e).__name__}: {str(e)[:90]}"
 
         try:
             d["cpu"] = f"host {os.cpu_count()}, kuota cgroup {cpu_quota()}"
@@ -590,7 +593,7 @@ def handler(event):
         d["env"] = {k: bool(os.environ.get(k)) for k in
                     ("API", "TOKEN", "USENET_HOST", "USENET_USER", "USENET_PASS",
                      "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET")}
-        return {"status": "diag", **d}
+        return {"status": "diag", "revisi": REVISI, **d}
 
     # PIPELINE bisa ditimpa per-job supaya dua mode bisa dibandingkan berdampingan
     # tanpa mengubah env endpoint dan menunggu worker berganti.
