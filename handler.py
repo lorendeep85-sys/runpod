@@ -507,7 +507,12 @@ def process_job(job, s3, bucket, smoke=0):
         subs = extract_subs(src, DL)
         if not subs:
             r = "hardsub - tidak ada trek subtitle teks"
-            api_post("/tsuki/fail", {"job_id": jid, "reason": r, "permanent": False})
+            # Permanen: mencoba lagi berarti mengunduh rilis yang sama persis
+            # dan mendapat hasil yang sama. Versi pertama menandainya tidak
+            # permanen, dan satu episode hardsub terunduh 3x sebelum menyerah.
+            # Kalau rilis softsub muncul belakangan, job-nya diantre ulang dari
+            # sisi backend -- bukan dengan mengulang rilis yang sudah ditolak.
+            api_post("/tsuki/fail", {"job_id": jid, "reason": r, "permanent": True})
             log(f"  TOLAK ep{ep}: {r}")
             return {"fail": r, "hardsub": True}
         log(f"  subtitle ok: {len(subs)} trek ({', '.join(sorted(subs))})")
@@ -553,7 +558,7 @@ def process_job(job, s3, bucket, smoke=0):
         api_post("/tsuki/fail", {"job_id": jid, "reason": str(e)[:250]}); return {"fail": str(e)[:200]}
 
 
-REVISI = "2026-09-02 softsub-gate"
+REVISI = "2026-09-02 softsub-gate-2"
 
 
 def handler(event):
