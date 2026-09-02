@@ -147,11 +147,18 @@ def _ep_dari_nama(nama, ep):
 
 
 def resolve(anilist_id, ep):
-    if not anilist_id: return None, None, "no anilist_id"
+    """(rilis, rentang, sebab). Sebab berawalan "!" = PERMANEN, jangan diulang.
+
+    Pembedaan ini yang selama ini hilang: "tidak menemukan kandidat" diucapkan
+    sama persis entah TsukiHime menjawab "tidak ada" atau tidak menjawab sama
+    sekali. Backend lalu mengunci job permanen pada percobaan pertama, sehingga
+    gangguan sesaat mematikan job selamanya.
+    """
+    if not anilist_id: return None, None, "!no anilist_id"
     try: a = hj(f"{TSUKI}/animes/anilist/{anilist_id}")
-    except Exception as e: return None, None, f"anilist gagal: {e}"
+    except Exception as e: return None, None, f"tsuki tak terjangkau: {e}"
     aid = (a.get("anime") or a).get("id") or a.get("id")
-    if not aid: return None, None, "not on tsuki"
+    if not aid: return None, None, "!not on tsuki"
     tor = []
     for off in (0, 100, 200, 300):
         d = hj(f"{TSUKI}/animes/{aid}?limit=100&offset={off}"); res = d.get("results", []); tor += res
@@ -425,7 +432,12 @@ def process_job(job, s3, bucket, smoke=0):
     else:
         rel, rng, mode = resolve(job.get("anilist_id"), ep)
     if not rel:
-        api_post("/tsuki/fail", {"job_id": jid, "reason": mode}); return {"skip": mode}
+        # "!" di depan = pod YAKIN ini tidak akan berubah bila diulang. Tanpa
+        # penanda itu backend mengulang, dan itu memang yang benar saat kita
+        # tidak yakin.
+        tetap = mode.startswith("!")
+        api_post("/tsuki/fail", {"job_id": jid, "reason": mode.lstrip("!"), "permanent": tetap})
+        return {"skip": mode}
     t = rel["torrent"] if isinstance(rel, dict) and "torrent" in rel else rel
     log(f"  [{mode}] {t['name'][:66]}")
     os.makedirs(DL, exist_ok=True)
