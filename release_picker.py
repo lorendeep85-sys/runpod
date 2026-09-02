@@ -19,6 +19,10 @@ RE_HEVC   = re.compile(r'\b(hevc|x265|h\.?265)\b', re.I)
 RE_AV1    = re.compile(r'\bav1\b', re.I)
 RE_10BIT  = re.compile(r'\b10.?bits?\b', re.I)
 RE_BATCH  = re.compile(r'\b(batch|complete|seasons?\s*\d|s\d{2}\b|\d+\s*-\s*\d+)\b', re.I)
+# Kita softsub saja. Ini cuma saringan lapis pertama -- banyak rilis hardsub
+# tidak menulisnya di nama, jadi gerbang sebenarnya ada di handler (ffprobe
+# trek subtitle sebelum encode). Yang di sini gunanya menghemat unduhan.
+RE_HARDSUB = re.compile(r'\bhard[\s._-]?subs?(bed)?\b', re.I)
 
 # grup WEB-DL yang rilisannya konsisten & rapi (bukan penilaian kualitas mutlak,
 # sekadar sinyal bahwa penamaan/struktur filenya bisa diandalkan)
@@ -51,6 +55,7 @@ def score(t, want_episodes=None, relax=False):
     if t.get("is_adult"):                  return None
     if RE_REMUX.search(low):               return None   # 40-90GB, mustahil
     if RE_2160.search(low):                return None   # decode 4x, output tetap 720p
+    if RE_HARDSUB.search(low):             return None   # sub terbakar, tak bisa diekstrak
     if not t.get("has_nzb") and not relax: return None   # jalur normal = Usenet
 
     gb = size_per_ep(t)

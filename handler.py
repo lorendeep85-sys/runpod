@@ -493,6 +493,25 @@ def process_job(job, s3, bucket, smoke=0):
         src = os.path.join(DL, sorted(vids, key=lambda f: -os.path.getsize(os.path.join(DL, f)))[0])
         st = os.statvfs(DL)
         prog(f"src {os.path.getsize(src)/1e9:.2f}GB, sisa disk {st.f_bavail*st.f_frsize/1e9:.1f}GB")
+        # --- gerbang softsub -----------------------------------------------
+        # Kita tidak mengambil hardsub. Kalau file tidak punya satu pun trek
+        # subtitle teks, subnya terbakar di gambar (atau memang raw) dan tidak
+        # ada yang bisa diekstrak -- episodenya akan naik tanpa subtitle sama
+        # sekali.
+        #
+        # Diperiksa DI SINI, sebelum encode: mengekstrak trek teks itu murah,
+        # encode 3 rung tidak. Versi lama mengekstrak SETELAH encode lalu
+        # menerbitkan apa adanya, jadi satu rilis hardsub menghabiskan jatah GPU
+        # penuh dan tetap menghasilkan episode tanpa sub.
+        prog("periksa subtitle")
+        subs = extract_subs(src, DL)
+        if not subs:
+            r = "hardsub - tidak ada trek subtitle teks"
+            api_post("/tsuki/fail", {"job_id": jid, "reason": r, "permanent": False})
+            log(f"  TOLAK ep{ep}: {r}")
+            return {"fail": r, "hardsub": True}
+        log(f"  subtitle ok: {len(subs)} trek ({', '.join(sorted(subs))})")
+
         videos = []
         lad = ladder_for(src_width(src))
         rungs = [(name, w, cq, mx, os.path.join(DL, f"e{ep}.{name}.mp4")) for name, w, cq, mx in lad]
@@ -517,7 +536,7 @@ def process_job(job, s3, bucket, smoke=0):
             log(f"    {name}: {m} -> {key} ({sz/1e6:.0f}MB)")
             try: os.remove(out)
             except OSError: pass
-        prog("ekstrak subtitle"); subs = extract_subs(src, DL); subout = []
+        prog("upload subtitle"); subout = []
         for lang, path in subs.items():
             key = f"tsuki/{sid}/e{ep}.{lang}.vtt"
             s3.upload_file(path, bucket, key, ExtraArgs={"ContentType": "text/vtt"})
