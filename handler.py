@@ -422,7 +422,10 @@ def process_job(job, s3, bucket, smoke=0):
     # tanpa ini ia jatuh ke pemilih otomatis dan tautannya diabaikan diam-diam.
     if job.get("nzb_url"):
         rel = {"id": 0, "name": job.get("torrent_name") or "", "nzb_url": job["nzb_url"]}
-        rng, mode = None, "episode"
+        # Pack batch dari aninzb ("Complete Series 01-25"): rentang di nama →
+        # mode batch, nzb_fetch hanya mengambil berkas episode target (--skip-eps).
+        rng = _range_covers(rel["name"], ep)
+        mode = "batch" if rng else "episode"
         log(f"  sumber {job.get('sumber') or 'luar'}: {rel['name'][:66]}")
     elif job.get("torrent_id"):
         rel = {"id": job["torrent_id"], "name": job.get("torrent_name") or ""}
