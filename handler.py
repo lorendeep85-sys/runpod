@@ -659,7 +659,8 @@ def handler(event):
 
     _EV["e"] = event
     s3, bucket = s3_client()
-    r = api_post("/tsuki/claim", {"worker_id": worker}); job = r.get("job")
+    # caps: backend hanya memberi job meta ke worker yang mengenalnya (rollout aman).
+    r = api_post("/tsuki/claim", {"worker_id": worker, "caps": ["meta"]}); job = r.get("job")
     if not job: return {"status": "empty"}
     if job.get("kind") == "meta":
         return {"status": "ok", **process_meta(job)}
