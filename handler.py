@@ -558,7 +558,40 @@ def process_job(job, s3, bucket, smoke=0):
         api_post("/tsuki/fail", {"job_id": jid, "reason": str(e)[:250]}); return {"fail": str(e)[:200]}
 
 
-REVISI = "2026-09-02 softsub-gate-2"
+REVISI = "2026-09-02 softsub-gate-2+meta"
+
+
+def process_meta(job):
+    """kind='meta': ambil Media AniList (Worker Cloudflare diblokir AniList, pod tidak)
+    lalu kirim apa adanya ke /tsuki/meta; backend yang menulis ke katalog."""
+    jid = job["id"]; sid = job["series_id"]; al = int(job.get("anilist_id") or 0)
+    _JOB["id"] = jid
+    q = job.get("al_query")
+    if not al or not q:
+        api_post("/tsuki/fail", {"job_id": jid, "reason": "meta: anilist_id/al_query kosong", "permanent": True})
+        return {"fail": "meta: anilist_id/al_query kosong"}
+    log(f"job {jid}: meta anilist {al} (series {sid})")
+    body = json.dumps({"query": q, "variables": {"id": al}}).encode()
+    try:
+        req = urllib.request.Request("https://graphql.anilist.co", data=body, headers={
+            "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "aniplay-pod"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            d = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        # 404 = id memang tidak ada (permanen); 429 = rate limit (ulang nanti)
+        tetap = e.code == 404
+        api_post("/tsuki/fail", {"job_id": jid, "reason": f"anilist HTTP {e.code}", "permanent": tetap})
+        return {"fail": f"anilist HTTP {e.code}"}
+    except Exception as e:
+        api_post("/tsuki/fail", {"job_id": jid, "reason": f"anilist: {str(e)[:120]}"})
+        return {"fail": str(e)[:120]}
+    m = (d.get("data") or {}).get("Media")
+    if not m:
+        api_post("/tsuki/fail", {"job_id": jid, "reason": "anilist: Media kosong", "permanent": True})
+        return {"fail": "anilist: Media kosong"}
+    r = api_post("/tsuki/meta", {"job_id": jid, "series_id": sid, "media": m})
+    log(f"  meta → {r}")
+    return {"meta": r}
 
 
 def handler(event):
@@ -628,6 +661,8 @@ def handler(event):
     s3, bucket = s3_client()
     r = api_post("/tsuki/claim", {"worker_id": worker}); job = r.get("job")
     if not job: return {"status": "empty"}
+    if job.get("kind") == "meta":
+        return {"status": "ok", **process_meta(job)}
     res = process_job(job, s3, bucket, smoke)
     return {"status": "ok", **res}
 
