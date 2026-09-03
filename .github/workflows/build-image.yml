@@ -1,0 +1,34 @@
+# Build & push image worker RunPod ke GHCR pada setiap push ke main.
+# Tidak butuh secret tambahan: GITHUB_TOKEN sudah boleh menulis package repo ini.
+# Image: ghcr.io/lorendeep85-sys/runpod:latest (+ tag sha pendek untuk rollback).
+name: build-image
+on:
+  push:
+    branches: [main]
+    paths: [Dockerfile, handler.py, nzb_fetch.py, release_picker.py, .github/workflows/build-image.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
