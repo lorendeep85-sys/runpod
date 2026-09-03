@@ -672,12 +672,20 @@ def handler(event):
     _EV["e"] = event
     s3, bucket = s3_client()
     # caps: backend hanya memberi job meta ke worker yang mengenalnya (rollout aman).
-    r = api_post("/tsuki/claim", {"worker_id": worker, "caps": ["meta"]}); job = r.get("job")
-    if not job: return {"status": "empty"}
-    if job.get("kind") == "meta":
-        return {"status": "ok", **process_meta(job)}
-    res = process_job(job, s3, bucket, smoke)
-    return {"status": "ok", **res}
+    # Satu invocation mengerjakan job BERUNTUN selama antrean masih ada, dibatasi
+    # jumlah dan waktu supaya tidak menabrak batas eksekusi endpoint. Sebelumnya
+    # 1 invocation = 1 job, sehingga backlog hanya bergerak sebanyak wake yang
+    # datang -- 49 job antre dengan satu worker sibuk dan sisanya diam.
+    t0 = time.time(); hasil = []
+    while len(hasil) < 6 and time.time() - t0 < 40 * 60:
+        r = api_post("/tsuki/claim", {"worker_id": worker, "caps": ["meta"]}); job = r.get("job")
+        if not job: break
+        if job.get("kind") == "meta":
+            hasil.append({"job": job["id"], **process_meta(job)}); continue
+        hasil.append({"job": job["id"], **process_job(job, s3, bucket, smoke)})
+        if smoke: break
+    if not hasil: return {"status": "empty"}
+    return {"status": "ok", "jobs": hasil}
 
 
 if __name__ == "__main__":
