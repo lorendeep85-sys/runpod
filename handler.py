@@ -430,7 +430,9 @@ def process_job(job, s3, bucket, smoke=0):
         mode = "batch" if rng else "episode"
         log(f"  rilis pilihan operator: {rel['name'][:66]}")
     else:
-        rel, rng, mode = resolve(job.get("anilist_id"), ep)
+        # TsukiHime DIBUANG (2026-09-03): job wajib membawa nzb_url (aninzb) atau
+        # torrent pilihan operator. Tanpa itu tidak ada sumber -- permanen, jangan diulang.
+        rel, rng, mode = None, None, "!tanpa sumber (job tanpa nzb_url; TsukiHime tidak dipakai lagi)"
     if not rel:
         # "!" di depan = pod YAKIN ini tidak akan berubah bila diulang. Tanpa
         # penanda itu backend mengulang, dan itu memang yang benar saat kita
