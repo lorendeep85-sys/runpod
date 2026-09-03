@@ -601,6 +601,31 @@ def process_meta(job):
     if not m:
         api_post("/tsuki/fail", {"job_id": jid, "reason": "anilist: Media kosong", "permanent": True})
         return {"fail": "anilist: Media kosong"}
+    if not al:
+        # Hasil pencarian judul harus benar-benar acara yang diminta: token judul
+        # kita harus tumpang tindih dengan salah satu judul/sinonim Media (≥60%),
+        # dan penanda musim (2nd/3rd/III/Season N) harus sepadan. Tanpa ini
+        # "Link Click III" bisa pulang membawa metadata Season 1.
+        def toks(x):
+            x = re.sub(r"[^\w]+", " ", str(x or "").lower())
+            return [t for t in x.split() if len(t) >= 2 and t not in ("the", "of", "and", "in", "a", "an", "to", "no", "wa", "season", "part")]
+        def musim(x):
+            x = str(x or "").lower()
+            mm = re.search(r"\b(\d)(?:st|nd|rd|th)\s+season\b|\bseason\s*(\d)\b|\bs(\d)\b|\b(ii|iii|iv)\b", x)
+            if not mm: return None
+            g = [v for v in mm.groups() if v]
+            return {"ii": 2, "iii": 3, "iv": 4}.get(g[0], None) if g[0] in ("ii", "iii", "iv") else int(g[0])
+        kandidat = [(m.get("title") or {}).get(k) for k in ("romaji", "english", "native")] + list(m.get("synonyms") or [])
+        q_t = toks(judul); q_m = musim(judul)
+        ok = False
+        for c in kandidat:
+            if not c: continue
+            ct = set(toks(c))
+            if q_t and sum(1 for t in q_t if t in ct) >= max(1, -(-len(q_t) * 6 // 10)) and (q_m is None or musim(c) in (q_m, None)):
+                ok = True; break
+        if not ok:
+            api_post("/tsuki/fail", {"job_id": jid, "reason": f"anilist: hasil cari '{(m.get('title') or {}).get('romaji')}' tidak cocok dengan '{judul[:50]}'", "permanent": True})
+            return {"fail": "anilist: hasil cari tidak cocok"}
     r = api_post("/tsuki/meta", {"job_id": jid, "series_id": sid, "media": m})
     log(f"  meta → {r}")
     return {"meta": r}
