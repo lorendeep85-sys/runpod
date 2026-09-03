@@ -569,11 +569,18 @@ def process_meta(job):
     jid = job["id"]; sid = job["series_id"]; al = int(job.get("anilist_id") or 0)
     _JOB["id"] = jid
     q = job.get("al_query")
-    if not al or not q:
-        api_post("/tsuki/fail", {"job_id": jid, "reason": "meta: anilist_id/al_query kosong", "permanent": True})
-        return {"fail": "meta: anilist_id/al_query kosong"}
-    log(f"job {jid}: meta anilist {al} (series {sid})")
-    body = json.dumps({"query": q, "variables": {"id": al}}).encode()
+    judul = (job.get("torrent_name") or "").strip()
+    if not q or (not al and not judul):
+        api_post("/tsuki/fail", {"job_id": jid, "reason": "meta: anilist_id/judul/al_query kosong", "permanent": True})
+        return {"fail": "meta: anilist_id/judul/al_query kosong"}
+    if al:
+        log(f"job {jid}: meta anilist {al} (series {sid})")
+        body = json.dumps({"query": q, "variables": {"id": al}}).encode()
+    else:
+        # Tanpa anilist_id: cari lewat judul (kecocokan terbaik AniList), lalu ambil Media penuh.
+        log(f"job {jid}: meta cari judul '{judul[:60]}' (series {sid})")
+        q = q.replace("query($id:Int){Media(id:$id,type:ANIME){", "query($q:String){Media(search:$q,type:ANIME,sort:SEARCH_MATCH){", 1)
+        body = json.dumps({"query": q, "variables": {"q": judul}}).encode()
     try:
         req = urllib.request.Request("https://graphql.anilist.co", data=body, headers={
             "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "aniplay-pod"})
