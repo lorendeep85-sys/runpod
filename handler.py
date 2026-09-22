@@ -111,7 +111,9 @@ def ladder_for(w):
 
 def _range_covers(name, ep):
     best = None
-    for m in re.finditer(r"(\d{1,4})\s*[-~]\s*(\d{1,4})", name):
+    # Angka awal tidak boleh menempel huruf: "Mushoku Tensei S3 - 13" (gaya
+    # SubsPlease) = musim 3 episode 13, BUKAN pack 3-13.
+    for m in re.finditer(r"(?<![A-Za-z])(\d{1,4})\s*[-~]\s*(\d{1,4})", name):
         a, b = int(m.group(1)), int(m.group(2))
         if a <= b and a <= ep <= b and (b - a) <= 200:
             if best is None or (b - a) < (best[1] - best[0]): best = (a, b)
