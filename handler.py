@@ -92,7 +92,9 @@ def norm_lang(t):
     m = {"eng": "en", "spa": "es", "por": "pt", "fre": "fr", "fra": "fr", "ger": "de",
          "deu": "de", "ara": "ar", "ind": "id", "jpn": "ja", "und": ""}
     t = m.get(t, t); return t if len(t) == 2 else ""
-def nzb_url(tid, name): return f"{STORAGE}/{'tosho/nzbs' if tid >= 1_000_000 else 'nzbs'}/{tid}/{urllib.parse.quote(name)}.nzb.gz"
+# "/" di nama rilis (gaya Shridhuu: "Judul / 中文 / Pinyin") memecah path storage → 404.
+# Storage melayani per id (nama kosmetik), jadi "/" diganti "_" dan di-quote tanpa karakter aman.
+def nzb_url(tid, name): return f"{STORAGE}/{'tosho/nzbs' if tid >= 1_000_000 else 'nzbs'}/{tid}/{urllib.parse.quote(name.replace('/', '_'), safe='')}.nzb.gz"
 def fetch_nzb(url, dest):
     raw = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "aniplay-mirror/1.0"}), timeout=120).read()
     open(dest, "wb").write(gzip.decompress(raw) if url.endswith(".gz") else raw); return dest
